@@ -15,51 +15,95 @@ url1 = "http://t66y.com/thread0806.php?fid=8&search=&page="
 url2 = "http://t66y.com/thread0806.php?fid=16&search=&page="
 max_thread = 200
 
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.132 Safari/537.36"}
+
 
 def get_with_proxy(url, **kwargs):
-    if proxies is not None:
-        return requests.get(url, proxies=proxies, **kwargs)
-    else:
-        return requests.get(url, **kwargs)
-
-
-def download_pic(name, url, path):  # 该函数用于下载具体帖子内的图片
-    count = -1
     try:
-        os.mkdir(path + "/" + name[:4])
-    except:
-        pass
-    if os.path.exists(path + "/" + name[:4] + "/" + name[4:]):
-        print("path['" + path + "/" + name[:4] + "/" + name[4:] + "'] exists")
-        return 0
+        if proxies is not None:
+            return requests.get(url, proxies=proxies, headers=headers, **kwargs)
+        else:
+            return requests.get(url, headers=headers, **kwargs)
+    except Exception as e:
+        print(e)
+        raise e
+
+
+def get_pic_in_new_thread(pic_url, pic_save_path, pic_filename):
+    print("downloading:", pic_filename, end="\n")
+    try:
+        r = get_with_proxy(pic_url, stream=True)
+    except Exception as e:
+        print("download img failed:", pic_filename, e, end="\n")
+        return
+    if r.status_code == 200:
+        open(pic_save_path, 'wb').write(r.content)
+        print("saved:", pic_filename, end="\n")
     else:
-        os.mkdir(path + "/" + name[:4] + "/" + name[4:])
+        print(r.status_code, ":download img failed!", pic_filename, end="\n")
+
+
+def get_photo_list(url, name, **kwargs):
+    retry_cnt = 0
+    if kwargs is not None and "retry_cnt" in kwargs.keys():
+        retry_cnt = kwargs.get("retry_cnt")
+        if retry_cnt >= 2:
+            # 若已经重试了一次或以上
+            print("get_photo_list 超过重试限制", name[4:], end="\n")
+
     try:
         f = get_with_proxy(url)
     except Exception as e:
-        print("download failed:", e)
-        return 0
-    soup = BeautifulSoup(f.content, "lxml")
-    photo_div = soup.find_all('div', class_="tpc_content do_not_catch")
-    photo_list = photo_div[0].find_all('img')
-    savepath = path + "/" + name[:4] + "/" + name[4:]
+        print("get photo list failed:" + name[4:], e)
+        return
+    try:
+        soup = BeautifulSoup(f.content, "lxml")
+        if "正在轉入主題, 请稍后" in soup.text:
+            # 触发了爬虫限制, 等待三秒后重新请求
+            time.sleep(3)
+            return get_photo_list(url, name, retry_cnt=retry_cnt + 1)
+        if "頁面暫時無法載入，請您稍後重試" in soup.text:
+            time.sleep(10)
+            return get_photo_list(url, name, retry_cnt=retry_cnt + 1)
+        photo_div = soup.find_all('div', class_="tpc_content do_not_catch")
+        photo_list = photo_div[0].find_all('img')
+        return photo_list
+    except Exception as e:
+        # 解析页面的时候可能的其他出错
+        print(e)
+        return []
+
+
+def download_pic(name, url, path):  # 该函数用于下载具体帖子内的图片
+    # count = 0  todo 多线程共享计数器
+    dst_path = path + "/" + name[:4] + "/" + name[4:]
+    if not os.path.exists(dst_path):
+        os.makedirs(dst_path)
+
+    photo_list = get_photo_list(url, name)
     photo_num = len(photo_list)
+
+    thread_list = []
     for li in photo_list:
         # print(str(li))
         pic_url = str(li).split('"')[-2]
-        print("download:", pic_url, end="")
-        try:
-            r = get_with_proxy(pic_url, stream=True)
-        except Exception as e:
-            print("connect failed:", e)
-            return 0
-        if r.status_code == 200:
-            count += 1
-            open(savepath + "/" + str(count) + "." + pic_url.split(".")[-1], 'wb').write(r.content)
-            print("(", count + 1, "/", photo_num, ")")
-        else:
-            print(r.status_code, ":request failed!")
-        del r
+        pic_filename = pic_url.split("/")[-1]
+        pic_save_path = os.path.join(dst_path, pic_filename)
+        if os.path.exists(pic_save_path):
+            # 若该文件已经下载过则跳过
+            continue
+        while threading.active_count() - 1 >= max_thread:
+            time.sleep(1)
+        download_thread = threading.Thread(target=get_pic_in_new_thread, args=(pic_url, pic_save_path, pic_filename,))
+        download_thread.start()
+        time.sleep(1)
+        thread_list.append(download_thread)
+
+    for t in thread_list:
+        # 每个下载线程最多等待10秒， 之后本线程会结束它
+        t.join(10)
+    print(str(photo_num), " jobs on the fly ", name[4:], end="\n")
 
 
 def get_list(class_name, url):  # 该函数获取板块内的帖子列表
@@ -74,6 +118,7 @@ def get_list(class_name, url):  # 该函数获取板块内的帖子列表
     except Exception as e:
         print("Connect failed:", e)
         sys.exit(0)
+
     soup = BeautifulSoup(f.content, "lxml")
     td = soup.find_all('td', class_="tal")
     post_list = dict()
@@ -91,19 +136,21 @@ def get_list(class_name, url):  # 该函数获取板块内的帖子列表
         post_url = str(i.find_all('h3')[0]).split('"')[1]
         post_url = main_url + post_url
         post_list[post_title] = post_url
-    print(post_list)
+    print(class_name, " 该板块帖子数：", str(len(post_list)), end="\n")
+    count = 0
     for key in post_list:
         # download_pic(key,post_list[key],"./t66y/"+class_name)
         while (1):
-            if threading.active_count() < max_thread:
+            if threading.active_count() - 1 < max_thread:
                 break
             else:
-                time.sleep(1)
+                time.sleep(0.1)
         download_thread = threading.Thread(target=download_pic,
                                            args=(key, post_list[key], "./t66y/" + class_name,))  # 多线程下载
-        download_thread.setDaemon(True)  # 设置守护进程
+        download_thread.setDaemon(True)  # 设置守护进程, 主线程退出时， OS自动结束所有下载线程
         download_thread.start()
-        time.sleep(0.1)
+        count += 1
+        print(class_name, "该板块进度： (", str(count), "/", str(len(post_list)), ")", end="\n")
 
 
 def pre_exit():
@@ -119,17 +166,20 @@ def pre_exit():
 
 
 def main():
-    global proxies
+    # global proxies
+    global max_thread
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--class_id', type=int, default=0,
                         help="'1' for 【新時代的我們】, '2' for 【達蓋爾的旗幟】, '0' for both")
     parser.add_argument('-s', '--start', type=int, default=1, help="Page_start(default=1)")
     parser.add_argument('-e', '--end', type=int, default=1, help="Page_end")
-    parser.add_argument('-m', '--max_thread', type=int, default=200, help="Max thread num(default=200)")
+    parser.add_argument('-m', '--max_thread', type=int, default=2, help="Max thread num(default=2)")
     args = parser.parse_args()
     class_id = args.class_id
     start = args.start
     end = args.end
+    max_thread = args.max_thread + 3
+
     if class_id > 2:
         print("Sorry no class [", class_id, "] !")
         sys.exit(0)
