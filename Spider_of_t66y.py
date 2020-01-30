@@ -8,7 +8,7 @@ import time
 import random
 
 # 如果需要连接socks代理
-proxies = {"http": "socks5h://127.0.0.1:1031"}
+proxies = {"http": "socks5h://127.0.0.1:1031", "https": "socks5h://127.0.0.1:1031"}
 
 class_list1 = ["[亞洲]", "[歐美]", "[動漫]", "[寫真]", "[原创]", "[其它]"]
 main_url = "http://t66y.com/"
