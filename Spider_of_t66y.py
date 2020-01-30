@@ -5,6 +5,7 @@ import sys
 import argparse
 import os
 import time
+import random
 
 # 如果需要连接socks代理
 proxies = {"http": "socks5h://127.0.0.1:1031"}
@@ -13,7 +14,8 @@ class_list1 = ["[亞洲]", "[歐美]", "[動漫]", "[寫真]", "[原创]", "[其
 main_url = "http://t66y.com/"
 url1 = "http://t66y.com/thread0806.php?fid=8&search=&page="
 url2 = "http://t66y.com/thread0806.php?fid=16&search=&page="
-max_thread = 200
+max_topic_thread = 5 # 最多同时下载多少个帖子
+max_download_thread = 10 # 最多同时下载多少张图片
 
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.132 Safari/537.36"}
@@ -51,6 +53,7 @@ def get_photo_list(url, name, **kwargs):
         if retry_cnt >= 2:
             # 若已经重试了一次或以上
             print("get_photo_list 超过重试限制", name[4:], end="\n")
+            return []
 
     try:
         f = get_with_proxy(url)
@@ -93,17 +96,18 @@ def download_pic(name, url, path):  # 该函数用于下载具体帖子内的图
         if os.path.exists(pic_save_path):
             # 若该文件已经下载过则跳过
             continue
-        while threading.active_count() - 1 >= max_thread:
+        while get_thread_count("downloadThread") > max_download_thread:
             time.sleep(1)
         download_thread = threading.Thread(target=get_pic_in_new_thread, args=(pic_url, pic_save_path, pic_filename,))
+        download_thread.setName("downloadThread" + str(random.randint(0, 1000000)))
         download_thread.start()
         time.sleep(1)
         thread_list.append(download_thread)
 
     for t in thread_list:
-        # 每个下载线程最多等待10秒， 之后本线程会结束它
+        # 每个下载线程最多等待10秒， 之后本线程会不再等待
         t.join(10)
-    print(str(photo_num), " jobs on the fly ", name[4:], end="\n")
+    print(str(photo_num), " jobs done! topic: ", name[4:], end="\n")
 
 
 def get_list(class_name, url):  # 该函数获取板块内的帖子列表
@@ -141,16 +145,26 @@ def get_list(class_name, url):  # 该函数获取板块内的帖子列表
     for key in post_list:
         # download_pic(key,post_list[key],"./t66y/"+class_name)
         while (1):
-            if threading.active_count() - 1 < max_thread:
+            if get_thread_count("topicThread") < max_topic_thread:
                 break
             else:
                 time.sleep(0.1)
         download_thread = threading.Thread(target=download_pic,
                                            args=(key, post_list[key], "./t66y/" + class_name,))  # 多线程下载
         download_thread.setDaemon(True)  # 设置守护进程, 主线程退出时， OS自动结束所有下载线程
+        download_thread.setName("topicThread" + str(random.randint(0, 1000000)))
         download_thread.start()
         count += 1
         print(class_name, "该板块进度： (", str(count), "/", str(len(post_list)), ")", end="\n")
+
+
+# 根据前缀获取正在运行的线程数
+def get_thread_count(thread_prefix):
+    count = 0
+    for t in threading.enumerate():
+        if t.getName().startswith(thread_prefix):
+            count += 1
+    return count
 
 
 def pre_exit():
@@ -167,18 +181,21 @@ def pre_exit():
 
 def main():
     # global proxies
-    global max_thread
+    global max_topic_thread
+    global max_download_thread
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--class_id', type=int, default=0,
                         help="'1' for 【新時代的我們】, '2' for 【達蓋爾的旗幟】, '0' for both")
     parser.add_argument('-s', '--start', type=int, default=1, help="Page_start(default=1)")
     parser.add_argument('-e', '--end', type=int, default=1, help="Page_end")
-    parser.add_argument('-m', '--max_thread', type=int, default=2, help="Max thread num(default=2)")
+    parser.add_argument('-mt', '--max_topic_thread', type=int, default=5, help="Max topic thread num(default=5)")
+    parser.add_argument('-md', '--max_download_thread', type=int, default=10, help="Max download thread num(default=10)")
     args = parser.parse_args()
     class_id = args.class_id
     start = args.start
     end = args.end
-    max_thread = args.max_thread + 3
+    max_topic_thread = args.max_topic_thread
+    max_download_thread = args.max_download_thread
 
     if class_id > 2:
         print("Sorry no class [", class_id, "] !")
